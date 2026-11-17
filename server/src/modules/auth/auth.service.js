@@ -3,10 +3,10 @@ import redis from '../../config/redis.js';
 import { generateAccessToken, generateRefreshToken, verifyRefreshToken } from '../../utils/jwt.js';
 import { generateToken, hashToken, generateOtp } from '../../utils/crypto.js';
 import {
-  sendEmailVerification,
-  sendPasswordResetEmail,
-  sendWelcomeEmail,
-} from '../../utils/email.js';
+  enqueueVerificationEmail,
+  enqueuePasswordResetEmail,
+  enqueueWelcomeEmail,
+} from '../../queues/index.js';
 import { createError } from '../../middleware/errorHandler.js';
 import {
   findUserByEmail,
@@ -76,9 +76,9 @@ export const registerUser = async ({ name, email, phone, password }) => {
     user.id
   );
 
-  // Send verification email (non-blocking — don't fail registration if email fails)
-  sendEmailVerification(user.email, user.name, rawToken).catch((err) =>
-    console.error('Email send failed:', err.message)
+  // Enqueue verification email via BullMQ (non-blocking)
+  enqueueVerificationEmail(user.email, user.name, rawToken).catch((err) =>
+    console.error('Failed to enqueue verification email:', err.message)
   );
 
   return { user };
@@ -119,8 +119,8 @@ export const resendVerificationEmail = async (email) => {
     user.id
   );
 
-  sendEmailVerification(user.email, user.name, rawToken).catch((err) =>
-    console.error('Email resend failed:', err.message)
+  enqueueVerificationEmail(user.email, user.name, rawToken).catch((err) =>
+    console.error('Failed to enqueue resend verification email:', err.message)
   );
 };
 
@@ -249,8 +249,8 @@ export const forgotPassword = async (email) => {
     JSON.stringify({ userId: user.id, email: user.email })
   );
 
-  sendPasswordResetEmail(user.email, user.name, rawToken).catch((err) =>
-    console.error('Password reset email failed:', err.message)
+  enqueuePasswordResetEmail(user.email, user.name, rawToken).catch((err) =>
+    console.error('Failed to enqueue password reset email:', err.message)
   );
 };
 
@@ -315,7 +315,7 @@ export const handleGoogleCallback = async (googleProfile, rememberMe = false) =>
 
   // Send welcome email to new Google users
   if (isNew) {
-    sendWelcomeEmail(user.email, user.name).catch(() => {});
+    enqueueWelcomeEmail(user.email, user.name).catch(() => {});
   }
 
   const { accessToken, refreshToken } = await issueTokenPair(user, rememberMe);

@@ -11,6 +11,8 @@
     "seed": "node database/seeds/index.js"
   },
   "dependencies": {
+    "@bull-board/api": "9.13.2",
+    "@bull-board/express": "9.13.2",
     "axios": "^1.7.2",
     "bcrypt": "^5.1.1",
     "bullmq": "^5.12.1",

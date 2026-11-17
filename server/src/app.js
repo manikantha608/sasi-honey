@@ -6,6 +6,7 @@ import cookieParser from 'cookie-parser';
 import dotenv from 'dotenv';
 
 import passport from './config/passport.js';
+import bullBoardRouter from './config/bullBoard.js';
 import { apiLimiter } from './middleware/rateLimiter.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import routes from './routes/index.js';
@@ -41,6 +42,9 @@ app.use(cookieParser(process.env.COOKIE_SECRET));
 // ─── Passport (session: false — we use stateless JWT) ────────────────────────
 app.use(passport.initialize());
 
+// ─── Bull Board (queue dashboard — development only) ─────────────────────────
+app.use('/admin/queues', bullBoardRouter.getRouter());
+
 // ─── Rate Limiting ────────────────────────────────────────────────────────────
 app.use('/api', apiLimiter);
 
@@ -55,6 +59,37 @@ app.get('/health', (req, res) =>
 
 // ─── API Routes ───────────────────────────────────────────────────────────────
 app.use('/api', routes);
+
+// ─── Dev queue test route — REMOVE before production ─────────────────────────
+if (process.env.NODE_ENV !== 'production') {
+  app.post('/dev/test-queue', async (req, res) => {
+    const { type = 'email' } = req.query;
+    const {
+      enqueueVerificationEmail,
+      enqueuePasswordResetEmail,
+      enqueueWelcomeEmail,
+      enqueueAdminOrderNotification,
+      enqueueLowStockAlert,
+    } = await import('./queues/index.js');
+
+    let job;
+    switch (type) {
+      case 'verification':
+        job = await enqueueVerificationEmail('demo@example.com', 'Demo User', 'token-abc123'); break;
+      case 'password_reset':
+        job = await enqueuePasswordResetEmail('demo@example.com', 'Demo User', 'reset-xyz'); break;
+      case 'welcome':
+        job = await enqueueWelcomeEmail('demo@example.com', 'Demo User'); break;
+      case 'order':
+        job = await enqueueAdminOrderNotification('order-42', 1499); break;
+      case 'inventory':
+        job = await enqueueLowStockAlert('prod-1', 'var-1', 2); break;
+      default:
+        return res.status(400).json({ error: `Unknown type. Use: verification, password_reset, welcome, order, inventory` });
+    }
+    res.json({ ok: true, jobId: job.id, queue: type });
+  });
+}
 
 // ─── 404 Handler ──────────────────────────────────────────────────────────────
 app.use((req, res) =>

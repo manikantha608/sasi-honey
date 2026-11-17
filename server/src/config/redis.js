@@ -1,14 +1,9 @@
 /**
  * Redis client with graceful degradation.
  *
- * In development, if Redis is not running the server continues to work using
- * an in-memory fallback store. Features that depend on Redis (email verify
- * tokens, brute-force counters, password-reset tokens) still function — they
- * just live in memory instead of a shared cache.
- *
- * In production you should always have Redis running. The fallback will log a
- * warning and function at reduced capacity (single-process only, no TTL
- * persistence across restarts).
+ * Attempts to connect to Redis on startup. If Redis is not reachable it falls
+ * back to an in-memory store so the server keeps running in development.
+ * In production Redis should always be available.
  */
 import Redis from 'ioredis';
 import dotenv from 'dotenv';
@@ -18,7 +13,7 @@ dotenv.config();
 // ─── In-memory fallback ───────────────────────────────────────────────────────
 class MemoryStore {
   constructor() {
-    this._store = new Map();   // key → { value, expiresAt }
+    this._store = new Map(); // key → { value, expiresAt }
     // Clean up expired keys every 60 seconds
     setInterval(() => this._purge(), 60_000).unref();
   }
@@ -80,14 +75,11 @@ class MemoryStore {
 
   async quit() { this._store.clear(); return 'OK'; }
   async disconnect() { return this.quit(); }
-  on() { return this; }  // no-op event emitter shim
+  on() { return this; } // no-op event emitter shim
 }
 
-// ─── Build the real Redis client ──────────────────────────────────────────────
-// TODO: Set usingFallback = false and call connectRedis() when Redis is ready.
-let usingFallback = true; // ← temporarily forced — Redis disconnected for now
-
-/* -- Uncomment this entire block when Redis is available --
+// ─── Real Redis client ────────────────────────────────────────────────────────
+let usingFallback = false;
 
 const buildRedisClient = () => {
   const client = new Redis({
@@ -96,7 +88,7 @@ const buildRedisClient = () => {
     password: process.env.REDIS_PASSWORD || undefined,
     lazyConnect: true,
     retryStrategy: (times) => {
-      if (times > 3) return null;
+      if (times > 3) return null; // stop retrying after 3 attempts
       return Math.min(times * 200, 2000);
     },
     enableOfflineQueue: false,
@@ -109,40 +101,34 @@ const buildRedisClient = () => {
 
   client.on('error', (err) => {
     if (!usingFallback) {
-      console.warn(`⚠️   Redis unavailable (${err.message}). Using in-memory fallback.`);
+      usingFallback = true;
+      console.warn(`⚠️   Redis error (${err.message}). Switching to in-memory fallback.`);
     }
   });
 
   return client;
 };
 
--- End uncomment block -- */
-
-// ─── Exported client proxy ────────────────────────────────────────────────────
-const realClient = null; // placeholder — replace with buildRedisClient() when ready
+// ─── Connect on startup ───────────────────────────────────────────────────────
+export const realClient = buildRedisClient();
 const fallback = new MemoryStore();
 
-console.log('ℹ️   Redis disconnected — using in-memory store (development mode).');
-
-// No-op until Redis is re-enabled
 export const connectRedis = async () => {
-  // TODO: uncomment when Redis is available:
-  // try {
-  //   await realClient.connect();
-  // } catch {
-  //   usingFallback = true;
-  //   console.warn('⚠️   Redis not reachable. Running with in-memory token store.');
-  // }
+  try {
+    await realClient.connect();
+  } catch (err) {
+    usingFallback = true;
+    console.warn(`⚠️   Redis not reachable (${err.message}). Running with in-memory token store.`);
+  }
 };
 
-// The proxy always routes to the in-memory fallback for now.
-// When Redis is re-enabled, change target to: usingFallback ? fallback : realClient
+// ─── Proxy — routes all calls to real Redis or fallback ───────────────────────
 const redis = new Proxy(
   {},
   {
     get(_, method) {
       return (...args) => {
-        const target = fallback; // ← always fallback until Redis is reconnected
+        const target = usingFallback ? fallback : realClient;
         if (typeof target[method] === 'function') {
           return target[method](...args);
         }
@@ -152,15 +138,23 @@ const redis = new Proxy(
   }
 );
 
-// Cache TTLs (seconds)
+// ─── BullMQ connection config ─────────────────────────────────────────────────
+// BullMQ manages its own ioredis connections internally — pass a config object,
+// not the shared proxy, so it can create subscriber/blocking connections freely.
+export const bullmqConnection = {
+  host: process.env.REDIS_HOST || 'localhost',
+  port: Number(process.env.REDIS_PORT) || 6379,
+  ...(process.env.REDIS_PASSWORD ? { password: process.env.REDIS_PASSWORD } : {}),
+};
+
+// ─── Cache TTLs (seconds) ─────────────────────────────────────────────────────
 export const TTL = {
-  PRODUCT: 60 * 10,        // 10 min
-  CATEGORY: 60 * 30,       // 30 min
-  OTP: 60 * 10,            // 10 min
-  RATE_LIMIT: 60 * 15,     // 15 min window
+  PRODUCT: 60 * 10,   // 10 min
+  CATEGORY: 60 * 30,  // 30 min
+  OTP: 60 * 10,       // 10 min
+  RATE_LIMIT: 60 * 15, // 15 min window
 };
 
 export const isRedisAvailable = () => !usingFallback;
 
-export { realClient };
 export default redis;

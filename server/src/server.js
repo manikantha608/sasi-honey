@@ -3,7 +3,14 @@ dotenv.config();
 
 import app from './app.js';
 import pool from './config/database.js';
-import { connectRedis } from './config/redis.js';
+import { connectRedis, realClient } from './config/redis.js';
+
+// ─── BullMQ queues & workers ──────────────────────────────────────────────────
+// Import queues first (registers them), then workers (start processing)
+import './queues/index.js';
+import emailWorker from './workers/emailWorker.js';
+import orderWorker from './workers/orderWorker.js';
+import inventoryWorker from './workers/inventoryWorker.js';
 
 // Redis connect is a no-op while disconnected — safe to call
 await connectRedis();
@@ -18,8 +25,13 @@ const server = app.listen(PORT, () => {
 const shutdown = async (signal) => {
   console.log(`\n${signal} received — shutting down gracefully...`);
   server.close(async () => {
-    await pool.end();
-    // TODO: add redis.quit() here when Redis is re-enabled
+    await Promise.all([
+      pool.end(),
+      realClient.quit(),
+      emailWorker.close(),
+      orderWorker.close(),
+      inventoryWorker.close(),
+    ]);
     console.log('✅  Connections closed');
     process.exit(0);
   });
