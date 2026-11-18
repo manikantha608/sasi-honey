@@ -1,9 +1,8 @@
 import React, { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useSelector } from 'react-redux';
-import { selectIsAuthenticated, selectIsAdmin } from '../features/auth/authSlice.js';
+import { selectIsAuthenticated } from '../features/auth/authSlice.js';
 import MainLayout from '../components/layout/MainLayout.jsx';
-import AdminLayout from '../components/layout/AdminLayout.jsx';
 import LoadingSpinner from '../components/common/LoadingSpinner.jsx';
 
 // ─── Lazy-loaded pages ────────────────────────────────────────────────────────
@@ -23,27 +22,14 @@ const ResetPassword      = lazy(() => import('../pages/Auth/ResetPassword.jsx'))
 const VerifyEmail        = lazy(() => import('../pages/Auth/VerifyEmail.jsx'));
 const GoogleCallback     = lazy(() => import('../pages/Auth/GoogleCallback.jsx'));
 
-// Admin pages
-const AdminDashboard  = lazy(() => import('../pages/Admin/Dashboard.jsx'));
-
 // ─── Route Guards ─────────────────────────────────────────────────────────────
 
-/** Requires authentication. Saves current location for post-login redirect. */
+/** Requires authentication. */
 const PrivateRoute = ({ children }) => {
   const isAuthenticated = useSelector(selectIsAuthenticated);
   return isAuthenticated ? children : (
-    <Navigate
-      to="/login"
-      replace
-      state={{ from: window.location, message: 'Please log in to continue.' }}
-    />
+    <Navigate to="/login" replace state={{ from: window.location, message: 'Please log in to continue.' }} />
   );
-};
-
-/** Requires admin role. */
-const AdminRoute = ({ children }) => {
-  const isAdmin = useSelector(selectIsAdmin);
-  return isAdmin ? children : <Navigate to="/" replace />;
 };
 
 /** Redirects authenticated users away from guest-only pages. */
@@ -78,14 +64,6 @@ const AppRoutes = () => (
         <Route path="/cart" element={<PrivateRoute><Cart /></PrivateRoute>} />
         <Route path="/checkout" element={<PrivateRoute><Checkout /></PrivateRoute>} />
         <Route path="/orders" element={<PrivateRoute><Orders /></PrivateRoute>} />
-      </Route>
-
-      {/* ── Admin routes — separate layout, admin-only ── */}
-      <Route
-        path="/admin"
-        element={<AdminRoute><AdminLayout /></AdminRoute>}
-      >
-        <Route index element={<AdminDashboard />} />
       </Route>
 
       {/* ── 404 ── */}
